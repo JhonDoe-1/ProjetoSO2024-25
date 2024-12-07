@@ -202,12 +202,12 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int *backupCount
       case CMD_HELP:
         printf( 
             "Available commands:\n"
-            "  WRITE [(key,value),(key2,value2),...]\n"
+            "  WRITE [(key,value)(key2,value2),...]\n"
             "  READ [key,key2,...]\n"
             "  DELETE [key,key2,...]\n"
             "  SHOW\n"
             "  WAIT <delay_ms>\n"
-            "  BACKUP\n" 
+            "  BACKUP\n" // Not implemented
             "  HELP\n"
         );
 
