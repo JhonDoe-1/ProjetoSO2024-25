@@ -39,6 +39,7 @@ int main(int argc, char *argv[]) {
     perror("Failed to open directory");
     exit(EXIT_FAILURE);
   }
+  chdir(directory_path);
   //Lê cada ficheiro na diretoria 
   struct dirent *dp;
   while ((dp = readdir(dir)) != NULL) {
@@ -49,7 +50,7 @@ int main(int argc, char *argv[]) {
     }
 
   }
-
+  chdir("..");
   closedir(dir);
 }
 
@@ -57,6 +58,8 @@ void process_job_file(struct dirent *dp) {
     char outputFileName[MAX_JOB_FILE_NAME_SIZE];
     strcpy(outputFileName, dp->d_name);
     //Abrir o ficheiro de input
+    printf(" ");
+    //printf("%s\n",dp->d_name);
     int input_fd = open(dp->d_name, O_RDONLY);
     if (input_fd < 0) {
       perror("Failed to open input file");
@@ -64,8 +67,8 @@ void process_job_file(struct dirent *dp) {
     }
     //Nome do ficheiro de output ex:. input1.job-> input1.out
     size_t len = strlen(outputFileName);
-    if (len >= 5) {
-        outputFileName[len-5] = 0;
+    if (len >= 4) {
+        outputFileName[len-4] = 0;
     }
     strcat(outputFileName,".out");
     //Criar ficheiro de output
@@ -98,7 +101,7 @@ void execute_command(enum Command cmd, int fd) {
   char values[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   unsigned int delay;
   size_t num_pairs;
-
+  
   switch (cmd) {
     case CMD_WRITE:
         num_pairs = parse_write(fd, keys, values, MAX_WRITE_SIZE, MAX_STRING_SIZE);

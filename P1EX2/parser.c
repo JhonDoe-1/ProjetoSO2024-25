@@ -87,7 +87,7 @@ enum Command get_next(int fd) {
   if (read(fd, buf, 1) != 1) {
     return EOC;
   }
-
+  
   switch (buf[0]) {
     case 'W':
       if (read(fd, buf + 1, 4) != 4 || strncmp(buf, "WAIT ", 5) != 0) {
