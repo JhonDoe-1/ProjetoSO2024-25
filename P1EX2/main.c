@@ -13,7 +13,7 @@
 #include "operations.h"
 
 void process_job_file(struct dirent *dp, int max_backups );
-void execute_command(enum Command cmd, int fd, int max_backups ,int *backupCounter,char inputFileName[]);
+void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounter,char inputFileName[]);
 
 int activeBackups=0;
 
@@ -41,6 +41,7 @@ int main(int argc, char *argv[]) {
     perror("Failed to open directory");
     exit(EXIT_FAILURE);
   }
+  chdir(directory_path);
   //Lê cada ficheiro na diretoria 
   struct dirent *dp;
   while ((dp = readdir(dir)) != NULL) {
@@ -55,7 +56,7 @@ int main(int argc, char *argv[]) {
 }
 
 void process_job_file(struct dirent *dp, int max_backups ) {
-    int *backupCounter=0;
+    int backupCounter=0;
     char outputFileName[MAX_JOB_FILE_NAME_SIZE];
     strcpy(outputFileName, dp->d_name);
     //Abrir o ficheiro de input
@@ -78,11 +79,15 @@ void process_job_file(struct dirent *dp, int max_backups ) {
         close(input_fd);
         return;
     }
-
+    setvbuf(stdout, NULL, _IOLBF, 0); // Line-buffered
+    fflush(stdout);
     // Processar cada comando do ficheiro
     // alterar default output file
-    int saved_stdout = dup(STDOUT_FILENO); //Salvar uma "cópia"/ um ponteiro para o default STDOUT_FILENO original
-    dup2(output_fd, STDOUT_FILENO); //trocar o default STDOUT_FILENO para ser o ficheiro de output que criámos
+    int saved_stdout = dup(1); //Salvar uma "cópia"/ um ponteiro para o default STDOUT_FILENO original
+    if(dup2(output_fd, 1)==-1){
+      perror("dup2 failed");
+      return;
+    } //trocar o default STDOUT_FILENO para ser o ficheiro de output que criámos
     while (1) {
       enum Command cmd = get_next(input_fd);
       if (cmd == EOC) break;
@@ -90,13 +95,16 @@ void process_job_file(struct dirent *dp, int max_backups ) {
       execute_command(cmd, input_fd,max_backups,backupCounter,dp->d_name);
     }
     // Restaurar o stdout original
-    dup2(saved_stdout, STDOUT_FILENO);
+    if(dup2(saved_stdout, 1)==-1){
+      perror("dup2 failed");
+      return;
+    }
     close(saved_stdout);
     close(input_fd);
     close(output_fd);
 }
 
-void execute_command(enum Command cmd, int fd, int max_backups ,int *backupCounter,char inputFileName[]) {
+void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounter,char inputFileName[]) {
   char keys[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   char values[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   unsigned int delay;
@@ -160,17 +168,17 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int *backupCount
         break;
 
       case CMD_BACKUP:
-        (*backupCounter)++;
+        backupCounter++;
 
         //nomear o ficheiro de backup
         char tempFileName[MAX_JOB_FILE_NAME_SIZE];
-        char backupFileName[MAX_JOB_FILE_NAME_SIZE+5];
+        char backupFileName[MAX_JOB_FILE_NAME_SIZE+8];
         strcpy(tempFileName, inputFileName);
         size_t len = strlen(tempFileName);
-        if (len >= 5) {
-          tempFileName[len-5] = 0;
+        if (len >= 4) {
+          tempFileName[len-4] = 0;
         }
-        sprintf(backupFileName,"%s-%ls.bck",tempFileName,backupCounter);
+        sprintf(backupFileName,"%s-%d.bck",tempFileName,backupCounter);
 
         // Verificar limite de backups simultâneos
         while (activeBackups >=max_backups) {
@@ -183,7 +191,7 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int *backupCount
             // Processo filho realiza o backup
             if (kvs_backup(backupFileName)) {
               fprintf(stderr, "Failed to perform backup.\n");
-              (*backupCounter)--;
+              backupCounter--;
             }
         } else if (pid > 0) {
             // Processo pai incrementa o contador de backups ativos

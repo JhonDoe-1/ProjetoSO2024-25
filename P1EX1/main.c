@@ -58,8 +58,7 @@ void process_job_file(struct dirent *dp) {
     char outputFileName[MAX_JOB_FILE_NAME_SIZE];
     strcpy(outputFileName, dp->d_name);
     //Abrir o ficheiro de input
-    printf(" ");
-    //printf("%s\n",dp->d_name);
+    
     int input_fd = open(dp->d_name, O_RDONLY);
     if (input_fd < 0) {
       perror("Failed to open input file");
@@ -78,11 +77,16 @@ void process_job_file(struct dirent *dp) {
         close(input_fd);
         return;
     }
-
+    setvbuf(stdout, NULL, _IOLBF, 0); // Line-buffered
+    fflush(stdout);
     // Processar cada comando do ficheiro
     // alterar default output file
-    int saved_stdout = dup(STDOUT_FILENO); //Salvar uma "cópia"/ um ponteiro para o default STDOUT_FILENO original
-    dup2(output_fd, STDOUT_FILENO); //trocar o default STDOUT_FILENO para ser o ficheiro de output que criámos
+    int saved_stdout = dup(1); //Salvar uma "cópia"/ um ponteiro para o default STDOUT_FILENO original
+    if(dup2(output_fd, 1)==-1){
+      perror("dup2 failed");
+      return;
+    } //trocar o default STDOUT_FILENO para ser o ficheiro de output que criámos
+    
     while (1) {
       enum Command cmd = get_next(input_fd);
       if (cmd == EOC) break;
@@ -90,7 +94,10 @@ void process_job_file(struct dirent *dp) {
       execute_command(cmd, input_fd);
     }
     // Restaurar o stdout original
-    dup2(saved_stdout, STDOUT_FILENO);
+    if(dup2(saved_stdout, 1)==-1){
+      perror("dup2 failed");
+      return;
+    }
     close(saved_stdout);
     close(input_fd);
     close(output_fd);
