@@ -15,7 +15,7 @@
 void process_job_file(struct dirent *dp, int max_backups );
 void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounter,char inputFileName[]);
 
-int activeBackups=0;
+int activeBackups=0; //vaiacel golbal para saber o nmr de processos de backup ativos no momento
 
 int main(int argc, char *argv[]) {
 
