@@ -13,7 +13,7 @@
 #include "operations.h"
 
 void process_job_file(struct dirent *dp, int max_backups );
-void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounter,char inputFileName[]);
+void execute_command(enum Command cmd, int fd, int max_backups ,int *backupCounter,char inputFileName[],int output_fd);
 
 int activeBackups=0; //vaiacel golbal para saber o nmr de processos de backup ativos no momento
 
@@ -56,7 +56,8 @@ int main(int argc, char *argv[]) {
 }
 
 void process_job_file(struct dirent *dp, int max_backups ) {
-    int backupCounter=0;
+    int value = 0;
+    int *backupCounter=&value;
     char outputFileName[MAX_JOB_FILE_NAME_SIZE];
     strcpy(outputFileName, dp->d_name);
     //Abrir o ficheiro de input
@@ -79,32 +80,21 @@ void process_job_file(struct dirent *dp, int max_backups ) {
         close(input_fd);
         return;
     }
-    setvbuf(stdout, NULL, _IOLBF, 0); // Line-buffered
-    fflush(stdout);
+    
     // Processar cada comando do ficheiro
-    // alterar default output file
-    int saved_stdout = dup(1); //Salvar uma "cópia"/ um ponteiro para o default STDOUT_FILENO original
-    if(dup2(output_fd, 1)==-1){
-      perror("dup2 failed");
-      return;
-    } //trocar o default STDOUT_FILENO para ser o ficheiro de output que criámos
+    
     while (1) {
       enum Command cmd = get_next(input_fd);
       if (cmd == EOC) break;
       // Executar cada comando
-      execute_command(cmd, input_fd,max_backups,backupCounter,dp->d_name);
+      execute_command(cmd, input_fd,max_backups,backupCounter,dp->d_name,output_fd);
     }
-    // Restaurar o stdout original
-    if(dup2(saved_stdout, 1)==-1){
-      perror("dup2 failed");
-      return;
-    }
-    close(saved_stdout);
+    
     close(input_fd);
     close(output_fd);
 }
 
-void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounter,char inputFileName[]) {
+void execute_command(enum Command cmd, int fd, int max_backups ,int *backupCounter,char inputFileName[],int output_fd) {
   char keys[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   char values[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   unsigned int delay;
@@ -132,7 +122,7 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounte
           return;
         }
 
-        if (kvs_read(num_pairs, keys)) {
+        if (kvs_read(num_pairs, keys,output_fd)) {
           fprintf(stderr, "Failed to read pair\n");
         }
         break;
@@ -145,14 +135,14 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounte
           return;
         }
 
-        if (kvs_delete(num_pairs, keys)) {
+        if (kvs_delete(num_pairs, keys,output_fd)) {
           fprintf(stderr, "Failed to delete pair\n");
         }
         break;
 
       case CMD_SHOW:
 
-        kvs_show();
+        kvs_show(output_fd);
         break;
 
       case CMD_WAIT:
@@ -168,7 +158,7 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounte
         break;
 
       case CMD_BACKUP:
-        backupCounter++;
+        (*backupCounter)++;
 
         //nomear o ficheiro de backup
         char tempFileName[MAX_JOB_FILE_NAME_SIZE];
@@ -178,14 +168,14 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounte
         if (len >= 4) {
           tempFileName[len-4] = 0;
         }
-        sprintf(backupFileName,"%s-%d.bck",tempFileName,backupCounter);
-
+        
+        
+        sprintf(backupFileName,"%s-%d.bck",tempFileName,*backupCounter);
         // Verificar limite de backups simultâneos
         while (activeBackups >=max_backups) {
             wait(NULL);  // Esperar por um backup concluir
             activeBackups--;
         }
-
         pid_t pid = fork();
         if (pid == 0) {
             // Processo filho realiza o backup
@@ -193,8 +183,10 @@ void execute_command(enum Command cmd, int fd, int max_backups ,int backupCounte
               fprintf(stderr, "Failed to perform backup.\n");
               backupCounter--;
             }
+            exit(0);
         } else if (pid > 0) {
             // Processo pai incrementa o contador de backups ativos
+            fprintf(stderr,"Processo filho com PID %d iniciou o processamento do backup %d do fihceiro '%s'\n", pid,*backupCounter,inputFileName);
             activeBackups++;
         } else {
             perror("Erro ao criar processo filho");

@@ -13,7 +13,7 @@
 #include "operations.h"
 
 void process_job_file(struct dirent *dp);
-void execute_command(enum Command cmd, int fd);
+void execute_command(enum Command cmd, int fd,int output_fd);
 
 int main(int argc, char *argv[]) {
 
@@ -80,30 +80,18 @@ void process_job_file(struct dirent *dp) {
     setvbuf(stdout, NULL, _IOLBF, 0); // Line-buffered
     fflush(stdout);
     // Processar cada comando do ficheiro
-    // alterar default output file
-    int saved_stdout = dup(1); //Salvar uma "cópia"/ um ponteiro para o default STDOUT_FILENO original
-    if(dup2(output_fd, 1)==-1){
-      perror("dup2 failed");
-      return;
-    } //trocar o default STDOUT_FILENO para ser o ficheiro de output que criámos
     
     while (1) {
       enum Command cmd = get_next(input_fd);
       if (cmd == EOC) break;
       // Executar cada comando
-      execute_command(cmd, input_fd);
+      execute_command(cmd, input_fd,output_fd);
     }
-    // Restaurar o stdout original
-    if(dup2(saved_stdout, 1)==-1){
-      perror("dup2 failed");
-      return;
-    }
-    close(saved_stdout);
     close(input_fd);
     close(output_fd);
 }
 
-void execute_command(enum Command cmd, int fd) {
+void execute_command(enum Command cmd, int fd,int output_fd) {
   char keys[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   char values[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   unsigned int delay;
@@ -131,7 +119,7 @@ void execute_command(enum Command cmd, int fd) {
           return;
         }
 
-        if (kvs_read(num_pairs, keys)) {
+        if (kvs_read(num_pairs, keys,output_fd)) {
           fprintf(stderr, "Failed to read pair\n");
         }
         break;
@@ -144,14 +132,14 @@ void execute_command(enum Command cmd, int fd) {
           return;
         }
 
-        if (kvs_delete(num_pairs, keys)) {
+        if (kvs_delete(num_pairs, keys,output_fd)) {
           fprintf(stderr, "Failed to delete pair\n");
         }
         break;
 
       case CMD_SHOW:
 
-        kvs_show();
+        kvs_show(output_fd);
         break;
 
       case CMD_WAIT:

@@ -66,39 +66,68 @@ int kvs_read(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
     return 1;
   }
 
-  dprintf(output_fd,"[");
+  if (write(output_fd, "[", 1) < 0) {
+      perror("Failed to write to file");
+      close(output_fd);
+      return 1;
+    }
   for (size_t i = 0; i < num_pairs; i++) {
+    char message2[MAX_JOB_FILE_NAME_SIZE*2+5];
     char* result = read_pair(kvs_table, keys[i]);
     if (result == NULL) {
-      dprintf(output_fd,"(%s,KVSERROR)", keys[i]);
+      sprintf(message2,"(%s,KVSERROR)", keys[i]);
     } else {
-      dprintf(output_fd,"(%s,%s)", keys[i], result);
+      sprintf(message2,"(%s,%s)", keys[i], result);
+    }
+    if (write(output_fd, message2, strlen(message2)) < 0) {
+      perror("Failed to write to file");
+      close(output_fd);
+      return 1;
     }
     free(result);
   }
-  dprintf(output_fd,"]\n");
+  if (write(output_fd, "]\n", 2) < 0) {
+    perror("Failed to write to file");
+    close(output_fd);
+    return 1;
+  }
   return 0;
 }
 
 int kvs_delete(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
   pthread_mutex_lock(&kvs_mutex);
+  
   if (kvs_table == NULL) {
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
   int aux = 0;
-
   for (size_t i = 0; i < num_pairs; i++) {
     if (delete_pair(kvs_table, keys[i]) != 0) {
       if (!aux) {
-        dprintf(output_fd,"[");
+        if (write(output_fd, "[", 1) < 0) {
+          perror("Failed to write to file");
+          close(output_fd);
+          return 1;
+        }
         aux = 1;
       }
-      dprintf(output_fd,"(%s,KVSMISSING)", keys[i]);
+      char message2[MAX_JOB_FILE_NAME_SIZE*2+5];
+      sprintf(message2,"(%s,KVSMISSING)", keys[i]);
+      if (write(output_fd, message2, strlen(message2)) < 0) {
+        perror("Failed to write to file");
+        close(output_fd);
+        return 1;
+      }
+      
     }
   }
   if (aux) {
-    dprintf(output_fd,"]\n");
+    if (write(output_fd, "]\n", 2) < 0) {
+      perror("Failed to write to file");
+      close(output_fd);
+      return 1;
+    }
   }
   pthread_mutex_unlock(&kvs_mutex);
   return 0;
@@ -109,7 +138,13 @@ void kvs_show(int output_fd) {
     KeyNode *keyNode = kvs_table->table[i];
     while (keyNode != NULL) {
       pthread_mutex_lock(&kvs_mutex);
-      dprintf(output_fd,"(%s, %s)\n", keyNode->key, keyNode->value);
+      char message[MAX_JOB_FILE_NAME_SIZE*2+5];
+      sprintf(message,"(%s, %s)\n", keyNode->key, keyNode->value);
+      if (write(output_fd, message, strlen(message)) < 0) {
+        perror("Failed to write to file");
+        close(output_fd);
+        return;
+      }
       keyNode = keyNode->next; // Move to the next node
       pthread_mutex_unlock(&kvs_mutex);
     }
@@ -119,7 +154,7 @@ void kvs_show(int output_fd) {
 int kvs_backup(char backupFileName[]) {
   
   if (kvs_table == NULL) {
-    //fprintf(stderr, "KVS state must be initialized\n");
+    fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
 
@@ -129,10 +164,8 @@ int kvs_backup(char backupFileName[]) {
     close(backup_fd);
     return 1;
   }
-  
   // Execute command
   kvs_show(backup_fd);
-  // Restore stdout
   close(backup_fd);
   return 0;
 }

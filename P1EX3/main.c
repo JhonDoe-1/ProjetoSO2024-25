@@ -14,21 +14,18 @@
 #include "operations.h"
 
 pthread_rwlock_t rwlock = PTHREAD_RWLOCK_INITIALIZER; // Read-write lock
-pthread_mutex_t process_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-char *directory_path; 
+
 DIR *dir;
 int max_backups=0;
-pid_t child_pids[1024];
-
-void log_child_completion(pid_t child_pid);
-void *process_job_file(void *arg);
-void execute_command(enum Command cmd, int fd ,int backupCounter,char inputFileName[],int output_fd);
-
 int activeBackups=0;
 
-int main(int argc, char *argv[]) {
+void *process_job_file(void *arg);
+void execute_command(enum Command cmd, int fd ,int *backupCounter,char inputFileName[],int output_fd);
 
+
+int main(int argc, char *argv[]) {
+  char *directory_path; 
   if (kvs_init()) {
     fprintf(stderr, "Failed to initialize KVS\n");
     return 1;
@@ -72,7 +69,6 @@ int main(int argc, char *argv[]) {
       }
 
       thread_count++;
-
       // Aguarda threads se o limite for atingido
       if (thread_count == max_threads) {
         for (int i = 0; i < thread_count; i++) {
@@ -83,16 +79,12 @@ int main(int argc, char *argv[]) {
     }
 
   }
-  
   // Espera pelas threads restantes
   for (int i = 0; i < thread_count; i++) {
     pthread_join(threads[i], NULL);
   }
-  
   // Destroy the read-write lock
-  
   pthread_rwlock_destroy(&rwlock);
-  pthread_mutex_destroy(&process_mutex);
   closedir(dir);
 }
 
@@ -101,8 +93,8 @@ int main(int argc, char *argv[]) {
 
 void *process_job_file(void *arg ) {
   struct dirent *dp = (struct dirent*) arg;
-
-  int backupCounter=0;
+  int value=0;
+  int *backupCounter=&value;
   char outputFileName[MAX_JOB_FILE_NAME_SIZE];
   strcpy(outputFileName, dp->d_name);
   //Abrir o ficheiro de input
@@ -141,7 +133,7 @@ void *process_job_file(void *arg ) {
   pthread_exit(NULL);
 }
 
-void execute_command(enum Command cmd, int fd ,int backupCounter,char inputFileName[],int output_fd) {
+void execute_command(enum Command cmd, int fd ,int *backupCounter,char inputFileName[],int output_fd) {
   char keys[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   char values[MAX_WRITE_SIZE][MAX_STRING_SIZE] = {0};
   unsigned int delay;
@@ -210,8 +202,7 @@ void execute_command(enum Command cmd, int fd ,int backupCounter,char inputFileN
         break;
 
       case CMD_BACKUP:
-        backupCounter++;
-
+        (*backupCounter)++;
         //nomear o ficheiro de backup
         char tempFileName[MAX_JOB_FILE_NAME_SIZE];
         char backupFileName[MAX_JOB_FILE_NAME_SIZE+8];
@@ -220,17 +211,16 @@ void execute_command(enum Command cmd, int fd ,int backupCounter,char inputFileN
         if (len >= 4) {
           tempFileName[len-4] = 0;
         }
-        sprintf(backupFileName,"%s-%d.bck",tempFileName,backupCounter);
-        //kvs_backup(backupFileName);
+        sprintf(backupFileName,"%s-%d.bck",tempFileName,*backupCounter);
+
         // Verificar limite de backups simultâneos
         while (activeBackups >=max_backups) {
-          waitpid(child_pids[0], NULL, 0);  // Esperar por um backup concluir
+          wait(NULL);  // Esperar por um backup concluir
           activeBackups--;
         }
         pid_t pid = fork();
         if (pid == 0) {
           // Processo filho realiza o backup
-          closedir(dir);
           if (kvs_backup(backupFileName)) {
             fprintf(stderr, "Failed to perform backup.\n");
             backupCounter--;
@@ -238,17 +228,12 @@ void execute_command(enum Command cmd, int fd ,int backupCounter,char inputFileN
           exit(0);
         } else if (pid > 0) {
           // Processo pai incrementa o contador de backups ativos
-          child_pids[activeBackups] = pid;
+          fprintf(stderr,"Processo filho com PID %d iniciou o processamento do backup %d do fihceiro '%s'\n", pid,*backupCounter,inputFileName);
           activeBackups++;
         } else {
           perror("Erro ao criar processo filho");
           exit(1);
         }
-        /*for (int ix = 0; ix < activeBackups; ix++) {
-          pid_t completed_pid = waitpid(child_pids[ix], NULL, 0); // Espera pelo PID específico
-          //closedir(dir);
-          log_child_completion(completed_pid); // Log do processo filho completado
-        }*/
         break;
 
       case CMD_INVALID:
@@ -263,7 +248,7 @@ void execute_command(enum Command cmd, int fd ,int backupCounter,char inputFileN
             "  DELETE [key,key2,...]\n"
             "  SHOW\n"
             "  WAIT <delay_ms>\n"
-            "  BACKUP\n" // Not implemented
+            "  BACKUP\n" 
             "  HELP\n"
         );
 
@@ -276,8 +261,6 @@ void execute_command(enum Command cmd, int fd ,int backupCounter,char inputFileN
         kvs_terminate();
         return;
   }
+  
 }
 
-void log_child_completion(pid_t child_pid) {
-    printf("Processo filho com PID %d completou o processamento\n", child_pid);
-}
