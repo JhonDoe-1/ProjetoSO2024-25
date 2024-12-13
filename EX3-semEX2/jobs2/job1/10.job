@@ -1,0 +1,6 @@
+# This is a basic test for the backup functionality
+WRITE [(ola,adeus)(adeus,ola)]
+BACKUP
+# WRITE [(tiago,106033)(luis,162230)]
+BACKUP
+SHOW
