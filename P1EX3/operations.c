@@ -8,12 +8,13 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <pthread.h> // Required for read-write locks
 
 #include "kvs.h"
 #include "constants.h"
 
 static struct HashTable* kvs_table = NULL;
-
+pthread_mutex_t kvs_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /// Calculates a timespec from a delay in milliseconds.
 /// @param delay_ms Delay in milliseconds.
@@ -49,35 +50,38 @@ int kvs_write(size_t num_pairs, char keys[][MAX_STRING_SIZE], char values[][MAX_
   }
 
   for (size_t i = 0; i < num_pairs; i++) {
+    pthread_mutex_lock(&kvs_mutex);
     if (write_pair(kvs_table, keys[i], values[i]) != 0) {
       fprintf(stderr, "Failed to write keypair (%s,%s)\n", keys[i], values[i]);
     }
+    pthread_mutex_unlock(&kvs_mutex);
   }
 
   return 0;
 }
 
-int kvs_read(size_t num_pairs, char keys[][MAX_STRING_SIZE]) {
+int kvs_read(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
   if (kvs_table == NULL) {
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
 
-  printf("[");
+  dprintf(output_fd,"[");
   for (size_t i = 0; i < num_pairs; i++) {
     char* result = read_pair(kvs_table, keys[i]);
     if (result == NULL) {
-      printf("(%s,KVSERROR)", keys[i]);
+      dprintf(output_fd,"(%s,KVSERROR)", keys[i]);
     } else {
-      printf("(%s,%s)", keys[i], result);
+      dprintf(output_fd,"(%s,%s)", keys[i], result);
     }
     free(result);
   }
-  printf("]\n");
+  dprintf(output_fd,"]\n");
   return 0;
 }
 
-int kvs_delete(size_t num_pairs, char keys[][MAX_STRING_SIZE]) {
+int kvs_delete(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
+  pthread_mutex_lock(&kvs_mutex);
   if (kvs_table == NULL) {
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
@@ -87,25 +91,27 @@ int kvs_delete(size_t num_pairs, char keys[][MAX_STRING_SIZE]) {
   for (size_t i = 0; i < num_pairs; i++) {
     if (delete_pair(kvs_table, keys[i]) != 0) {
       if (!aux) {
-        printf("[");
+        dprintf(output_fd,"[");
         aux = 1;
       }
-      printf("(%s,KVSMISSING)", keys[i]);
+      dprintf(output_fd,"(%s,KVSMISSING)", keys[i]);
     }
   }
   if (aux) {
-    printf("]\n");
+    dprintf(output_fd,"]\n");
   }
-
+  pthread_mutex_unlock(&kvs_mutex);
   return 0;
 }
 
-void kvs_show() {
+void kvs_show(int output_fd) {
   for (int i = 0; i < TABLE_SIZE; i++) {
     KeyNode *keyNode = kvs_table->table[i];
     while (keyNode != NULL) {
-      printf("(%s, %s)\n", keyNode->key, keyNode->value);
+      pthread_mutex_lock(&kvs_mutex);
+      dprintf(output_fd,"(%s, %s)\n", keyNode->key, keyNode->value);
       keyNode = keyNode->next; // Move to the next node
+      pthread_mutex_unlock(&kvs_mutex);
     }
   }
 }
@@ -120,14 +126,13 @@ int kvs_backup(char backupFileName[]) {
   int backup_fd = open(backupFileName, O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if(backup_fd<0){
     perror("Failed to create backup file");
+    close(backup_fd);
     return 1;
   }
-  int saved_stdout = dup(STDOUT_FILENO); //Save the default STDOUT_FILENO
-  dup2(backup_fd, STDOUT_FILENO); //Replace the default STDOUT_FILENO
+  
   // Execute command
-  kvs_show();
+  kvs_show(backup_fd);
   // Restore stdout
-  dup2(saved_stdout, STDOUT_FILENO);
   close(backup_fd);
   return 0;
 }
