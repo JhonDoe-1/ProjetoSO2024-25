@@ -61,7 +61,7 @@ int kvs_read(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
-
+  //usamos a funcao write para escrever diretamente no output_fd
   if (write(output_fd, "[", 1) < 0) {
       perror("Failed to write to file");
       close(output_fd);
@@ -96,6 +96,7 @@ int kvs_delete(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
     return 1;
   }
   int aux = 0;
+  //usamos a funcao write para escrever diretamente no output_fd
   for (size_t i = 0; i < num_pairs; i++) {
     if (delete_pair(kvs_table, keys[i]) != 0) {
       if (!aux) {
@@ -131,6 +132,7 @@ void kvs_show(int output_fd) {
   for (int i = 0; i < TABLE_SIZE; i++) {
     KeyNode *keyNode = kvs_table->table[i];
     while (keyNode != NULL) {
+      //usamos a funcao write para escrever diretamente no output_fd
       char message[MAX_JOB_FILE_NAME_SIZE*2+5];
       sprintf(message,"(%s, %s)\n", keyNode->key, keyNode->value);
       if (write(output_fd, message, strlen(message)) < 0) {
@@ -144,22 +146,7 @@ void kvs_show(int output_fd) {
   }
 }
 
-int kvs_backup(char backupFileName[]) {
-  
-  if (kvs_table == NULL) {
-    fprintf(stderr, "KVS state must be initialized\n");
-    return 1;
-  }
-
-  int backup_fd = open(backupFileName, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if(backup_fd<0){
-    perror("Failed to create backup file");
-    close(backup_fd);
-    return 1;
-  }
-  // Execute command
-  kvs_show(backup_fd);
-  close(backup_fd);
+int kvs_backup() {
   return 0;
 }
 

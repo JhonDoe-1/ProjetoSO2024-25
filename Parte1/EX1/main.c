@@ -77,8 +77,7 @@ void process_job_file(struct dirent *dp) {
         close(input_fd);
         return;
     }
-    setvbuf(stdout, NULL, _IOLBF, 0); // Line-buffered
-    fflush(stdout);
+    
     // Processar cada comando do ficheiro
     
     while (1) {

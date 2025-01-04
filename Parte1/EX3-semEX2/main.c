@@ -15,10 +15,6 @@
 
 pthread_rwlock_t rwlock = PTHREAD_RWLOCK_INITIALIZER; // Read-write lock
 
-
-DIR *dir;
-int max_backups=0;
-
 void *process_job_file(void *arg);
 void execute_command(enum Command cmd, int fd ,int output_fd);
 
@@ -36,14 +32,14 @@ int main(int argc, char *argv[]) {
   }
 
   directory_path = argv[1];
-  max_backups = atoi(argv[2]);
+  int max_backups = atoi(argv[2]);
   int max_threads = atoi(argv[3]);
   
   if (max_backups < 1) {
     fprintf(stderr, "Invalid max_backups value.\n");
     return 1;
   }
-  
+  DIR *dir;
   //Abre a diretoria especificada
   dir = opendir(directory_path);
   if (!dir) {
@@ -107,8 +103,7 @@ void *process_job_file(void *arg ) {
     outputFileName[len-4] = 0;
   }
   strcat(outputFileName,".out");
-  setvbuf(stdout, NULL, _IOLBF, 0); // Line-buffered
-  fflush(stdout);
+  
   //Criar ficheiro de output
   int output_fd = open(outputFileName, O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (output_fd < 0) {
@@ -118,7 +113,6 @@ void *process_job_file(void *arg ) {
     pthread_exit(NULL);
   }
   
-  fflush(stdout);
   while (1) {
     enum Command cmd = get_next(input_fd);
     if (cmd == EOC) break;
