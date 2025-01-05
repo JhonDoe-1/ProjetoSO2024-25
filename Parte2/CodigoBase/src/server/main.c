@@ -282,7 +282,6 @@ int main(int argc, char **argv) {
     write_str(STDERR_FILENO, " <jobs_dir>");
     write_str(STDERR_FILENO, " <max_threads>");
     write_str(STDERR_FILENO, " <max_backups> \n");
-    write_str(STDERR_FILENO, " <nome_do_FIFO_de_registo> \n");
     return 1;
   }
 

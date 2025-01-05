@@ -14,6 +14,40 @@
 #include "parser.h"
 #include "pthread.h"
 
+#define PIPE_NAME_SIZE 40
+#define MAX_KEY_SIZE 40
+#define OP_CONNECT 1
+#define OP_DISCONNECT 2
+#define OP_SUBSCRIBE 3
+#define OP_UNSUBSCRIBE 4
+#define OP_NOTIFICATION 5
+#define MAX_SUBSCRIPTIONS 100
+
+// Estrutura para armazenar subscrições de chaves
+typedef struct {
+  char key[MAX_KEY_SIZE];
+  int notification_fd;
+} Subscription;
+
+// Estrutura para representar um cliente conectado
+typedef struct {
+  int active;
+  int request_fd;
+  int response_fd;
+  int notification_fd;
+  Subscription subscriptions[MAX_SUBSCRIPTIONS];
+  int subscription_count;
+} ClientSession;
+
+ClientSession client_session;
+
+void process_request(int server_fd, const char *jobs_dir);
+void handle_connect(char *buffer);
+void handle_disconnect();
+void handle_subscribe(char *buffer);
+void handle_unsubscribe(char *buffer);
+void notify_clients(const char *key, const char *value);
+
 struct SharedData {
   DIR *dir;
   char *dir_name;
@@ -27,6 +61,147 @@ size_t active_backups = 0; // Number of active backups
 size_t max_backups;        // Maximum allowed simultaneous backups
 size_t max_threads;        // Maximum allowed simultaneous threads
 char *jobs_directory = NULL;
+
+
+void process_request(int server_fd, const char *jobs_dir) {
+  char buffer[128] = {0};
+  if (read(server_fd, buffer, sizeof(buffer)) > 0) {
+      char op_code = buffer[0];
+      switch (op_code) {
+          case OP_CONNECT:
+              handle_connect(buffer);
+              break;
+          case OP_DISCONNECT:
+              handle_disconnect();
+              break;
+          case OP_SUBSCRIBE:
+              handle_subscribe(buffer);
+              break;
+          case OP_UNSUBSCRIBE:
+              handle_unsubscribe(buffer);
+              break;
+          default:
+              fprintf(stderr, "Unknown operation code: %d\n", op_code);
+      }
+  }
+}
+
+void handle_connect(char *buffer) {
+  if (client_session.active) {
+      fprintf(stderr, "Server already has an active session.\n");
+      return;
+  }
+
+  char *request_pipe = buffer + 1;
+  char *response_pipe = buffer + 1 + PIPE_NAME_SIZE;
+  char *notification_pipe = buffer + 1 + 2 * PIPE_NAME_SIZE;
+
+  client_session.request_fd = open(request_pipe, O_RDONLY);
+  client_session.response_fd = open(response_pipe, O_WRONLY);
+  client_session.notification_fd = open(notification_pipe, O_WRONLY);
+
+  if (client_session.request_fd == -1 || client_session.response_fd == -1 || client_session.notification_fd == -1) {
+      perror("Error opening client FIFOs");
+      return;
+  }
+
+  client_session.active = 1;
+  client_session.subscription_count = 0;
+
+  char response[2] = {OP_CONNECT, 0};
+  write(client_session.response_fd, response, sizeof(response));
+  printf("Client connected.\n");
+}
+
+void handle_disconnect() {
+  if (!client_session.active) {
+      fprintf(stderr, "No active client session to disconnect.\n");
+      return;
+  }
+
+  close(client_session.request_fd);
+  close(client_session.response_fd);
+  close(client_session.notification_fd);
+
+  memset(&client_session, 0, sizeof(ClientSession));
+  printf("Client disconnected.\n");
+}
+
+void handle_subscribe(char *buffer) {
+  if (!client_session.active) {
+      fprintf(stderr, "No active client session for subscription.\n");
+      return;
+  }
+
+  char *key = buffer + 1;
+
+  if (client_session.subscription_count >= MAX_SUBSCRIPTIONS) {
+      fprintf(stderr, "Maximum subscriptions reached.\n");
+      return;
+  }
+
+  for (int i = 0; i < client_session.subscription_count; ++i) {
+      if (strcmp(client_session.subscriptions[i].key, key) == 0) {
+          fprintf(stderr, "Key already subscribed.\n");
+          return;
+      }
+  }
+
+  strcpy(client_session.subscriptions[client_session.subscription_count].key, key);
+  client_session.subscriptions[client_session.subscription_count].notification_fd = client_session.notification_fd;
+  client_session.subscription_count++;
+
+  char response[2] = {OP_SUBSCRIBE, 0};
+  write(client_session.response_fd, response, sizeof(response));
+  printf("Client subscribed to key: %s\n", key);
+}
+
+void handle_unsubscribe(char *buffer) {
+  if (!client_session.active) {
+      fprintf(stderr, "No active client session for unsubscription.\n");
+      return;
+  }
+
+  char *key = buffer + 1;
+
+  for (int i = 0; i < client_session.subscription_count; ++i) {
+      if (strcmp(client_session.subscriptions[i].key, key) == 0) {
+          // Remove subscription
+          for (int j = i; j < client_session.subscription_count - 1; ++j) {
+              client_session.subscriptions[j] = client_session.subscriptions[j + 1];
+          }
+          client_session.subscription_count--;
+
+          char response[2] = {OP_UNSUBSCRIBE, 0};
+          write(client_session.response_fd, response, sizeof(response));
+          printf("Client unsubscribed from key: %s\n", key);
+          return;
+      }
+  }
+
+  char response[2] = {OP_UNSUBSCRIBE, 1};
+  write(client_session.response_fd, response, sizeof(response));
+  fprintf(stderr, "Key not found for unsubscription: %s\n", key);
+}
+
+void notify_clients(const char *key, const char *value) {
+  if (!client_session.active) {
+      return;
+  }
+
+  for (int i = 0; i < client_session.subscription_count; ++i) {
+      if (strcmp(client_session.subscriptions[i].key, key) == 0) {
+          char notification[82] = {0};
+          strncpy(notification, key, MAX_KEY_SIZE);
+          strncpy(notification + MAX_KEY_SIZE, value, MAX_KEY_SIZE);
+          write(client_session.notification_fd, notification, sizeof(notification));
+          printf("Notified client about key: %s, value: %s\n", key, value);
+      }
+  }
+}
+
+
+
 
 int filter_job_files(const struct dirent *entry) {
   const char *dot = strrchr(entry->d_name, '.');
@@ -275,8 +450,20 @@ static void dispatch_threads(DIR *dir) {
   free(threads);
 }
 
+// Function to set up the named pipe and start the server
+int setup_named_pipe(const char *pipe_path) {
+  // Attempt to create the named pipe
+  unlink(pipe_path);
+  if (mkfifo(pipe_path, 0666) < 0) {
+    perror("mkfifo");
+    return -1;
+  }
+
+  return 0;
+}
+
 int main(int argc, char **argv) {
-  if (argc < 4) {
+  if (argc < 5) {
     write_str(STDERR_FILENO, "Usage: ");
     write_str(STDERR_FILENO, argv[0]);
     write_str(STDERR_FILENO, " <jobs_dir>");
@@ -287,6 +474,29 @@ int main(int argc, char **argv) {
   }
 
   jobs_directory = argv[1];
+
+  const char *register_fifo = argv[4];
+
+    // Criar o named pipe de registro
+    if (mkfifo(register_fifo, 0666) == -1) {
+        perror("Error creating register FIFO");
+        return 1;
+    }
+
+    int server_fd = open(register_fifo, O_RDONLY);
+    if (server_fd == -1) {
+        perror("Error opening register FIFO");
+        return 1;
+    }
+
+    memset(&client_session, 0, sizeof(ClientSession));
+
+    printf("Server is running and waiting for connections...\n");
+    while (1) {
+        process_request(server_fd, jobs_dir);
+    }//todo!!!!!!!!!!!!!!!!!!!!!!!
+
+
 
   char *endptr;
   max_backups = strtoul(argv[3], &endptr, 10);
@@ -337,6 +547,8 @@ int main(int argc, char **argv) {
   }
 
   kvs_terminate();
-
+  
+  close(server_fd);
+  unlink(register_fifo);
   return 0;
 }
