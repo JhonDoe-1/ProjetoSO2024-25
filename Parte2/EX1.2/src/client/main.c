@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
   strncat(resp_pipe_path, argv[1], strlen(argv[1]) * sizeof(char));
   strncat(notif_pipe_path, argv[1], strlen(argv[1]) * sizeof(char));
 
-  // TODO open pipes
+  // create pipes
   int req_pipe,resp_pipe;
   mkfifo(notif_pipe_path, 0640);
   mkfifo(req_pipe_path, 0640);
@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to disconnect to the server\n");
         return 1;
       }
-      // TODO: end notifications thread
+      
       unlink(notif_pipe_path);
       unlink(resp_pipe_path);
       unlink(req_pipe_path);
@@ -106,7 +106,6 @@ int main(int argc, char *argv[]) {
       if (kvs_subscribe(keys[0],req_pipe,resp_pipe)!=0) {
         fprintf(stderr, "Command subscribe failed\n");
         close(req_pipe);
-        //close(noti_pipe);
         close(resp_pipe);
         return 0;
       }

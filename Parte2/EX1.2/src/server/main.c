@@ -10,11 +10,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <errno.h>
 
 #include "constants.h"
 #include "io.h"
 #include "operations.h"
 #include "parser.h"
+#include "queue.h"
 #include "pthread.h"
 #include "../common/io.h"
 #include "../common/constants.h"
@@ -42,8 +44,8 @@ static int entry_files(const char *dir, struct dirent *entry, char *in_path,char
 static int run_job(int in_fd, int out_fd, char *filename);
 static void *get_file(void *arguments);
 static void dispatch_threads(DIR *dir,int server_fd);
-void create_session(session_t *session, char req_pipe_path[],char resp_pipe_path[],char noti_pipe_path[], int id);
-void *worker_thread(void *arg);
+void create_session(session_t *session, char req_pipe_path[],char resp_pipe_path[],char noti_pipe_path[]);
+void *manager_thread(void *arg);
 int addKey(char array[][MAX_STRING_SIZE],char key[]);
 int removeKey(char array[][MAX_STRING_SIZE],char key[]);
 void updateKey(size_t num_pairs,char keys[][MAX_STRING_SIZE],char values[][MAX_STRING_SIZE], int mode);
@@ -95,7 +97,7 @@ int main(int argc, char **argv) {
   }
   // Initialize pipe
   int register_fifo;
-  if (initialize_pipe(/*&register_fifo,*/ server_pipe_path)) {
+  if (initialize_pipe(server_pipe_path)) {
     return 1;
   }
   openPipe(&register_fifo, server_pipe_path);
@@ -110,7 +112,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Failed to open directory: %s\n", argv[1]);
     return 0;
   }
-
+  //initialize producer-consumer buffer
+  if (queue_init()) 
+    return 1;
+  
   dispatch_threads(dir,register_fifo);
 
 
@@ -125,7 +130,7 @@ int main(int argc, char **argv) {
   }
   unlink(argv[4]);
   kvs_terminate();
-
+  queue_destroy();
   return 0;
 }
 
@@ -364,13 +369,19 @@ static void dispatch_threads(DIR *dir ,int server_fd) {
     fprintf(stderr, "[ERR]: Failed to set signal handler\n");
     return;
   }
+  // Create worker threads
+  
+  pthread_t thread[MAX_SESSION_COUNT];
+  for (size_t i = 0; i < MAX_SESSION_COUNT; i++) {
+    pthread_create(thread + i, NULL, manager_thread, (void *)i);
+  }
   // ler do FIFO de registo
   while(1){
     if(sigusr1_triggered==true){
       printf("Shutting down sessions...\n");
       for(int i=0;i<MAX_SESSION_COUNT;i++){
         if(sessions[i]!=NULL){
-          printf("Removing connection %d\n",sessions[i]->id);
+          printf("Removing session %d\n",sessions[i]->id);
           unlink(sessions[i]->request_pipe);
           unlink(sessions[i]->response_pipe);
           unlink(sessions[i]->noti_pipe);
@@ -387,34 +398,19 @@ static void dispatch_threads(DIR *dir ,int server_fd) {
     ssize_t num_read = read(server_fd, buf, 1);
     if (num_read > 0){
       if(buf[0]=='1'){
-        char req_pipe_path[40];
-        char resp_pipe_path[40];
-        char noti_pipe_path[40];
+        session_t session;
+        char req_pipe_path[41];
+        char resp_pipe_path[41];
+        char noti_pipe_path[41];
         read(server_fd,req_pipe_path,40);req_pipe_path[40]='\0';
         read(server_fd,resp_pipe_path,40);resp_pipe_path[40]='\0';
         read(server_fd,noti_pipe_path,40);noti_pipe_path[40]='\0';
-        int resp_pipe=open(resp_pipe_path,O_RDWR);
-        if(active_threads<=MAX_SESSION_COUNT){
-          session_t *session = malloc(sizeof(session_t));
-          
-          printf("Trying to connect on session %d\n",connected_ids);
-          create_session(session, req_pipe_path, resp_pipe_path, noti_pipe_path,connected_ids);
-          printf("Connected session id: %d\n",connected_ids);
-          connected_ids++;
 
-          write(resp_pipe,"10",2);
-          pthread_t tarefasGestoras[MAX_SESSION_COUNT];
-          //GERIR AS TAREFAS DO CLIENT
-          if (pthread_create(&tarefasGestoras[active_threads], NULL, worker_thread, (void *)session) ) {
-            perror("pthread_create failed");
-            free(session);
-          }
-          active_threads++;
-        }
-        else{
-          write(resp_pipe,"11",2);
-        }
-        close(resp_pipe);
+        create_session(&session, req_pipe_path,resp_pipe_path,noti_pipe_path);
+        //printf("Placing session %s in queue\n",session.request_pipe);
+        queue_produce(&session);
+        //printf("Session %s is now in queue\n",session.request_pipe);
+
       }
     }
   }
@@ -434,112 +430,116 @@ static void dispatch_threads(DIR *dir ,int server_fd) {
 
   free(threads);
 }
-
-void create_session(session_t *session, char req_pipe_path[],char resp_pipe_path[],char noti_pipe_path[], int id){
-
-  for (int i=0;i<MAX_SESSION_COUNT;i++){
-    if(sessions[i]==NULL){
-      strncpy(session->request_pipe, req_pipe_path,MAX_PIPE_PATH_LENGTH);
-      strncpy(session->response_pipe, resp_pipe_path,MAX_PIPE_PATH_LENGTH);
-      strncpy(session->noti_pipe, noti_pipe_path,MAX_PIPE_PATH_LENGTH);
-      session->id=id;
-      session->num_keys=0;
-      for(int j=0;j<MAX_NUMBER_SUB;j++){
-        session->keys[i][0]='\0';
-      }
-
-      sessions[i]=session;
-      return;
-    }
-    
-  }
-  
-  
-  
-
-}
-
-void *worker_thread(void *arg){
-  session_t *session=(session_t *)arg;
-  
-  
+void *manager_thread(void *arg) {
+  unsigned int session_id = (unsigned int)(intptr_t)arg;
+  session_t *session=malloc(sizeof(session_t));
   sigset_t set;
   sigemptyset(&set);
   sigaddset(&set, SIGUSR1);
   if (pthread_sigmask(SIG_BLOCK, &set, NULL)) {
-    fprintf(stderr, "[ERR]: Failed to block signal\n");
+    fprintf(stderr, "Failed to block signal\n");
+    return (void *)1;
   }
-  while(1){
-    int req_pipe=open(session->request_pipe, O_RDONLY);
-    int resp_pipe=open(session->response_pipe, O_WRONLY);
-    if (req_pipe<0||resp_pipe<0){
-      close(req_pipe);
-      close(resp_pipe);
-      pthread_exit(NULL);
-      return (void *)1;
-    }
-    char buf[1];
-    ssize_t num_read = read(req_pipe, buf, 1);
-
-    if(num_read<0){
-      close(req_pipe);
-      close(resp_pipe);
-      pthread_exit(NULL);
-      return (void *)1;
-    }
-    if (num_read > 0){
-      if(buf[0]=='2'){
-        printf("Disconect on session %d\n",session->id);
-        if(remove_session(session)==0){
-          char message[2]="20";
-          write(resp_pipe,message,2);
-        }
-        else{
-          char message[2]="21";
-          write(resp_pipe,message,2);
-        }
-        connected_ids--;
-        pthread_exit(NULL);
-        return (void *)0;
+  
+  while (1) {
+    // Take session from producer-consumer buffer
+    int resp_pipe, req_pipe;
+    queue_consume(session, session_id);
+    for (int i=0;i<MAX_SESSION_COUNT;i++){
+      if(sessions[i]==NULL){
+        sessions[i]=session;
+        break;
       }
-
-
-      if(buf[0]=='3'){
-        printf("Subscribe on session %d\n",session->id);
-        char key[41];
-        read(req_pipe,key,41);
-        if(checkKey(key)==0&&addKey(session->keys,key)==0){
-          char message[2]="31";
-          write(resp_pipe,message,2);
-          session->num_keys++;
-        }
-        else{
-          char message[2]="30";
-          write(resp_pipe,message,2);
-        }
-      }
-
-
-      if(buf[0]=='4'){
-        printf("Unsubscribe on session %d\n",session->id);
-        char key[41];
-        read(req_pipe,key,41);
-        if(removeKey(session->keys,key)==0){
-          char message[2]="41";
-          write(resp_pipe,message,2);
-          session->num_keys++;
-        }
-        else{
-          char message[2]="40";
-          write(resp_pipe,message,2);
-        }
-      }
+      
     }
+    //printf("Consumed session for %s\n",session->request_pipe);
+    resp_pipe=open(session->response_pipe, O_WRONLY);
+    write(resp_pipe,"10",2);
     close(resp_pipe);
-    close(req_pipe);
+
+    while(1){
+     req_pipe=open(session->request_pipe, O_RDONLY);
+     resp_pipe=open(session->response_pipe, O_WRONLY);
+      if (req_pipe<0||resp_pipe<0){
+        close(req_pipe);
+        close(resp_pipe);
+        break;
+      }
+      char buf[1];
+      ssize_t num_read = read(req_pipe, buf, 1);
+
+      if(num_read<0){
+        close(req_pipe);
+        close(resp_pipe);
+        break;
+      }
+      if (num_read > 0){
+        if(buf[0]=='2'){
+          printf("Disconect on session %d\n",session->id);
+          if(remove_session(session)==0){
+            char message[2]="20";
+            write(resp_pipe,message,2);
+          }
+          else{
+            char message[2]="21";
+            write(resp_pipe,message,2);
+          }
+          connected_ids--;
+          close(req_pipe);
+          close(resp_pipe);
+          break;
+        }
+
+
+        if(buf[0]=='3'){
+          printf("Subscribe on session %d\n",session->id);
+          char key[41];
+          read(req_pipe,key,41);
+          if(checkKey(key)==0&&addKey(session->keys,key)==0){
+            char message[2]="31";
+            write(resp_pipe,message,2);
+            session->num_keys++;
+          }
+          else{
+            char message[2]="30";
+            write(resp_pipe,message,2);
+          }
+        }
+
+
+        if(buf[0]=='4'){
+          printf("Unsubscribe on session %d\n",session->id);
+          char key[41];
+          read(req_pipe,key,41);
+          if(removeKey(session->keys,key)==0){
+            char message[2]="41";
+            write(resp_pipe,message,2);
+            session->num_keys++;
+          }
+          else{
+            char message[2]="40";
+            write(resp_pipe,message,2);
+          }
+        }
+      }
+      close(resp_pipe);
+      close(req_pipe);
+    }
   }
+  return (void *)0;
 }
 
+
+void create_session(session_t *session, char req_pipe_path[],char resp_pipe_path[],char noti_pipe_path[]){  
+  strncpy(session->request_pipe, req_pipe_path,MAX_PIPE_PATH_LENGTH);
+  strncpy(session->response_pipe, resp_pipe_path,MAX_PIPE_PATH_LENGTH);
+  strncpy(session->noti_pipe, noti_pipe_path,MAX_PIPE_PATH_LENGTH);
+  session->num_keys=0;
+  for(int j=0;j<MAX_NUMBER_SUB;j++){
+    session->keys[j][0]='\0';
+  }
+
+}
 
 int addKey(char array[][MAX_STRING_SIZE],char key[]){
   if(existentKey(array,key)>=0){
@@ -571,13 +571,13 @@ int removeKey(char array[][MAX_STRING_SIZE],char key[]){
 void updateKey(size_t num_pairs,char keys[][MAX_STRING_SIZE],char values[][MAX_STRING_SIZE], int mode){
 
   for(size_t i=0;i<num_pairs;i++){
-    //printf("Lookig for a session following key: %s\n",keys[i]);
+    //Lookig for a session following keys[i]
     for(size_t j=0;j<MAX_SESSION_COUNT;j++){
       if(sessions[j]!=NULL){
-        //printf("Trying in session %d\n",sessions[j]->id);
+        //Trying in sessions[j]->id
         for(size_t k=0;k<MAX_NUMBER_SUB;k++){
           if(strcmp(sessions[j]->keys[k],keys[i])==0){
-            //printf("Found in session %d\n",sessions[j]->id);
+            //Found in session sessions[j]->id
             char message[256];
             if(mode==0){
               sprintf(message,"(%s,%s)",keys[i],values[i]);
@@ -587,7 +587,7 @@ void updateKey(size_t num_pairs,char keys[][MAX_STRING_SIZE],char values[][MAX_S
               removeKey(sessions[i]->keys, keys[i]);
             }
             int noti_pipe=open(sessions[j]->noti_pipe,O_WRONLY);
-            //printf("Writing to pipe: %s\n",sessions[j]->noti_pipe);
+            //Writing to pipe
             write(noti_pipe,message,strlen(message));
           }
           break;
@@ -600,17 +600,17 @@ void updateKey(size_t num_pairs,char keys[][MAX_STRING_SIZE],char values[][MAX_S
 
 }
 
-//TODO REMOVE SESSION
+
 int remove_session(session_t *session){
   for(int i=0;i<MAX_SESSION_COUNT;i++){
     if(sessions[i]!=NULL){
       if(sessions[i]->id==session->id){
-      free(sessions[i]);
-      sessions[i]=NULL;
-      session=NULL;
-      active_threads--;
-      return 0;
-    }
+        free(sessions[i]);
+        sessions[i]=NULL;
+        session=NULL;
+        active_threads--;
+        return 0;
+      }
     }
     
   }

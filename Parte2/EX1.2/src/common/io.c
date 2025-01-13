@@ -85,29 +85,18 @@ void delay(unsigned int time_ms) {
   nanosleep(&delay, NULL);
 }
 
-int initialize_pipe(/*int* register_fifo,*/ const char* register_pipe_path) {
+int initialize_pipe(const char* register_pipe_path) {
   // Remove pipe if it exists already
   if (unlink(register_pipe_path) && errno != ENOENT) {
-    fprintf(stderr, "[ERR]: Failed to unlink %s: %s\n", register_pipe_path, strerror(errno));
+    fprintf(stderr, "Failed to unlink %s: %s\n", register_pipe_path, strerror(errno));
     return 1;
   }
 
   // Create pipe
   if (mkfifo(register_pipe_path, 0640)) {
-    fprintf(stderr, "[ERR]: Failed to create register fifo %s: %s\n", register_pipe_path, strerror(errno));
+    fprintf(stderr, "Failed to create register fifo %s: %s\n", register_pipe_path, strerror(errno));
     return 1;
   }
-
-  /*if (DEBUG_IO) {
-    printf("[DEBUG]: Opening pipe \"%s\" (O_RDWR)\n", register_pipe_path);
-  }*/
-  // Opening with Read Write causes thread to block when nothing is sent (instead of EOF)
-  
-  /*register_fifo = open(register_pipe_path, O_RDWR);
-  if (*register_fifo < 0) {
-    fprintf(stderr, "[ERR]: Failed to open register fifo \"%s\": %s\n", register_pipe_path, strerror(errno));
-    return 1;
-  }*/
 
   return 0;
 }
@@ -115,18 +104,18 @@ int initialize_pipe(/*int* register_fifo,*/ const char* register_pipe_path) {
 void openPipe(int* register_fifo, const char* register_pipe_path){
   *register_fifo = open(register_pipe_path, O_RDWR);
   if (*register_fifo < 0) {
-    fprintf(stderr, "[ERR]: Failed to open register fifo \"%s\": %s\n", register_pipe_path, strerror(errno));
+    fprintf(stderr, "Failed to open register fifo \"%s\": %s\n", register_pipe_path, strerror(errno));
     return;
   }
 }
 
-// Function to pad a string with '\0' to ensure it has exactly 40 characters
+
 void pad_string(char *dest, const char *src) {
     size_t len = strlen(src);
     if (len >= 40) {
-        memcpy(dest, src, 40); // Copy up to 40 characters
+        memcpy(dest, src, 40); 
     } else {
-        // Copy the string and pad the rest with '\0'
+        
         memcpy(dest, src, len);
         memset(dest + len, '\0', 40 - len);
     }

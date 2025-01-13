@@ -21,7 +21,6 @@ int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path,
   
   int server_fd=open(server_pipe_path, O_WRONLY);
   
-  //printf("%s\n",message);
   ssize_t bytes_written = write(server_fd, message, 121);
   if(bytes_written<0){
     close(server_fd);
@@ -94,9 +93,9 @@ int kvs_subscribe(const char *key,int req_pipe,int resp_pipe) {
   message[0]='3';
   size_t len = strlen(key);
   if (len >= 40) {
-    memcpy(message+1, key, 41); // Copy up to 40 characters
+    memcpy(message+1, key, 41); 
   } else {
-    // Copy the string and pad the rest with '\0'
+    
     memcpy(message+1, key, len);
     memset(message+1 + len, '\0', 41 - len);
   }
@@ -118,9 +117,7 @@ int kvs_subscribe(const char *key,int req_pipe,int resp_pipe) {
     ssize_t num_read = read(resp_pipe, buf, 2);
     
     if (num_read > 0){
-      //printf("%c\n",buf[0]);
       if(buf[0]=='3'){
-        //printf("subscribe done\n");
         if(buf[1]=='0')
           printf("Server returned 0 for operation: subscribe\n");
         else
@@ -129,7 +126,6 @@ int kvs_subscribe(const char *key,int req_pipe,int resp_pipe) {
       break;
     }
   }
-  // pipe
   return 0;
 }
 
@@ -160,7 +156,6 @@ int kvs_unsubscribe(const char *key,int req_pipe,int resp_pipe) {
     ssize_t num_read = read(resp_pipe, buf, 2);
     
     if (num_read > 0){
-      //printf("%c\n",buf[0]);
       if(buf[0]=='4'){
         if(buf[1]=='0')
           printf("Server returned 0 for operation: unsubscribe\n");
@@ -170,7 +165,6 @@ int kvs_unsubscribe(const char *key,int req_pipe,int resp_pipe) {
       break;
     }
   }
-  // pipe
   return 0;
 }
 
